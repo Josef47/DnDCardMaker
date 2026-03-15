@@ -3,13 +3,14 @@ import { scrapeSpell } from "@/lib/scrapeSpell";
 
 export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get("url");
+  const name = req.nextUrl.searchParams.get("name") || "";
 
   if (!url) {
     return NextResponse.json({ error: "Missing url" }, { status: 400 });
   }
 
   try {
-    const data = await scrapeSpell(url);
+    const data = await scrapeSpell(url, name);
     return NextResponse.json(data);
   } catch (error) {
     return NextResponse.json(

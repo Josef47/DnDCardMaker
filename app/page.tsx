@@ -1,17 +1,32 @@
 "use client";
-import React, { useMemo, useState } from "react";
+
+import React, { useEffect, useMemo, useState } from "react";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { Search, Upload, Wand2, Sparkles, Download, Grid3X3 } from "lucide-react";
 
-const defaultData = {
+type SpellListItem = {
+  name: string;
+  url: string;
+  level: string;
+};
+
+type SpellData = {
+  title: string;
+  damage: string;
+  school: string;
+  metaLines: string[];
+  description: string;
+  accent?: string;
+  sourceUrl?: string;
+};
+
+type SavedCard = {
+  id: string;
+  imageUrl: string;
+  data: SpellData;
+};
+
+const defaultData: SpellData = {
   title: "Acid Splash",
   damage: "1d6 Acid",
   school: "Conjuration cantrip",
@@ -24,6 +39,7 @@ const defaultData = {
   description:
     "You hurl a bubble of acid. Choose one creature you can see within range, or choose two creatures you can see within range that are within 5 feet of each other. A target must succeed on a Dexterity saving throw or take 1d6 acid damage.\n\nAt Higher Levels. This spell’s damage increases by 1d6 when you reach 5th level (2d6), 11th level (3d6), and 17th level (4d6).\n\nSpell Lists. Artificer, Sorcerer, Wizard",
   accent: "#c8b22e",
+  sourceUrl: "https://dnd5e.wikidot.com/spell:acid-splash",
 };
 
 function inferDamage(text: string) {
@@ -41,15 +57,6 @@ function slugifySpellName(name: string) {
     .replace(/^-|-$/g, "");
 }
 
-type SpellData = {
-  title: string;
-  damage: string;
-  school: string;
-  metaLines: string[];
-  description: string;
-  accent?: string;
-};
-
 function SpellCard({
   data,
   imageUrl,
@@ -61,7 +68,7 @@ function SpellCard({
 }) {
   return (
     <div
-      className={`relative rounded-[24px] border-[4px] border-neutral-500 bg-white shadow-xl ${
+      className={`relative overflow-hidden rounded-[24px] border-[4px] border-neutral-500 bg-white ${
         small ? "h-[340px] w-[235px] p-3" : "min-h-[460px] w-[320px] p-4"
       }`}
       style={{ fontFamily: 'Georgia, "Times New Roman", serif' }}
@@ -99,6 +106,15 @@ function SpellCard({
   );
 }
 
+function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-3xl bg-white p-5 shadow-xl">
+      <h2 className="mb-4 text-lg font-semibold text-neutral-900">{title}</h2>
+      {children}
+    </div>
+  );
+}
+
 export default function SpellCardBuilderApp() {
   const [spellName, setSpellName] = useState("Acid Splash");
   const [siteUrl, setSiteUrl] = useState("");
@@ -108,9 +124,11 @@ export default function SpellCardBuilderApp() {
   const [damage, setDamage] = useState(defaultData.damage);
   const [school, setSchool] = useState(defaultData.school);
   const [metaText, setMetaText] = useState(defaultData.metaLines.join("\n"));
-  const [accent, setAccent] = useState(defaultData.accent);
+  const [accent, setAccent] = useState(defaultData.accent || "#c8b22e");
   const [status, setStatus] = useState("Ready");
-  const [copies, setCopies] = useState(9);
+  const [spellList, setSpellList] = useState<SpellListItem[]>([]);
+  const [spellSearch, setSpellSearch] = useState("");
+  const [sheetCards, setSheetCards] = useState<SavedCard[]>([]);
 
   const derivedSpellUrl = useMemo(() => {
     if (siteUrl.trim()) return siteUrl.trim();
@@ -127,24 +145,53 @@ export default function SpellCardBuilderApp() {
       metaLines,
       description: manualText,
       accent,
+      sourceUrl: derivedSpellUrl,
     }),
-    [title, damage, school, metaLines, manualText, accent]
+    [title, damage, school, metaLines, manualText, accent, derivedSpellUrl]
   );
 
-  async function fetchSpell() {
+  const filteredSpellList = useMemo(() => {
+    const q = spellSearch.trim().toLowerCase();
+    if (!q) return spellList;
+    return spellList.filter((spell) => `${spell.name} ${spell.level}`.toLowerCase().includes(q));
+  }, [spellList, spellSearch]);
+
+  useEffect(() => {
+    fetchSpellIndex();
+  }, []);
+
+  async function fetchSpellIndex() {
+    try {
+      setStatus("Loading spell list...");
+      const response = await fetch("/api/spells-index");
+      if (!response.ok) throw new Error("Could not load spell index");
+      const data = await response.json();
+      setSpellList(data.spells || []);
+      setStatus("Spell list loaded");
+    } catch (error) {
+      console.error(error);
+      setStatus("Could not load spell list");
+    }
+  }
+
+  async function fetchSpell(urlOverride?: string, nameOverride?: string) {
+    const targetUrl = urlOverride || derivedSpellUrl;
+    if (nameOverride) setSpellName(nameOverride);
     setStatus("Fetching spell data...");
     try {
-      const response = await fetch(`/api/scrape-spell?url=${encodeURIComponent(derivedSpellUrl)}`);
+      const response = await fetch(
+        `/api/scrape-spell?url=${encodeURIComponent(targetUrl)}&name=${encodeURIComponent(nameOverride || spellName)}`
+      );
       if (!response.ok) throw new Error("Scrape failed");
       const data = await response.json();
-
-      setTitle(data.title || "");
+      setTitle(nameOverride || spellName || data.title || "");
       setSchool(data.school || "");
       setMetaText((data.metaLines || []).join("\n"));
       setManualText(data.description || "");
       setDamage(data.damage || inferDamage(data.description || ""));
+      setSiteUrl(targetUrl);
       if (data.accent) setAccent(data.accent);
-      setStatus("Spell loaded");
+      setStatus(`Loaded ${data.title || "spell"}`);
     } catch (error) {
       console.error(error);
       setStatus("Could not fetch automatically. You can still edit manually.");
@@ -168,6 +215,32 @@ export default function SpellCardBuilderApp() {
     }
   }
 
+  function addCurrentCardToSheet() {
+    if (sheetCards.length >= 9) {
+      setStatus("A4 sheet already has 9 cards");
+      return;
+    }
+
+    const newCard: SavedCard = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      imageUrl,
+      data: { ...cardData, metaLines: [...cardData.metaLines] },
+    };
+
+    setSheetCards((prev) => [...prev, newCard]);
+    setStatus(`Added ${cardData.title} to A4 sheet`);
+  }
+
+  function removeCardFromSheet(id: string) {
+    setSheetCards((prev) => prev.filter((card) => card.id !== id));
+    setStatus("Removed card from A4 sheet");
+  }
+
+  function clearSheet() {
+    setSheetCards([]);
+    setStatus("Cleared A4 sheet");
+  }
+
   async function exportSinglePng() {
     const node = document.getElementById("single-card-preview");
     if (!node) return;
@@ -187,141 +260,189 @@ export default function SpellCardBuilderApp() {
     const canvas = await html2canvas(node, { scale: 2, backgroundColor: "#ffffff" });
     const imgData = canvas.toDataURL("image/png");
     const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    const pageWidth = 210;
-    const pageHeight = 297;
-    pdf.addImage(imgData, "PNG", 0, 0, pageWidth, pageHeight);
-    pdf.save(`${slugifySpellName(title || "spell-cards")}-sheet.pdf`);
+    pdf.addImage(imgData, "PNG", 0, 0, 210, 297);
+    pdf.save(`spell-cards-sheet.pdf`);
     setStatus("A4 PDF exported");
   }
 
   return (
     <div className="min-h-screen bg-neutral-100 p-6">
-      <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[420px_1fr]">
-        <Card className="rounded-3xl border-0 shadow-xl">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-2xl">
-              <Wand2 className="h-6 w-6" />
-              Spell Card Builder
-            </CardTitle>
-            <p className="text-sm text-neutral-600">
-              Fetch a spell from Wikidot, upload an image, then export one card or a 3×3 A4 sheet.
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="space-y-2">
-              <Label>Spell name</Label>
+      <div className="mx-auto grid max-w-[1600px] gap-6 xl:grid-cols-[320px_420px_1fr]">
+        <SectionCard title="Spell Library">
+          <div className="space-y-3">
+            <input
+              className="w-full rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:border-neutral-500"
+              placeholder="Search spell names"
+              value={spellSearch}
+              onChange={(e) => setSpellSearch(e.target.value)}
+            />
+            <div className="text-sm text-neutral-500">{filteredSpellList.length} spells shown</div>
+            <div className="h-[780px] overflow-auto rounded-2xl border border-neutral-200 bg-neutral-50 p-2">
+              <div className="space-y-1">
+                {filteredSpellList.map((spell) => (
+                  <button
+                    key={spell.url}
+                    onClick={() => fetchSpell(spell.url, spell.name)}
+                    className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-white"
+                  >
+                    <span className="font-medium text-neutral-900">{spell.name}</span>
+                    <span className="ml-3 text-xs text-neutral-500">{spell.level}</span>
+                  </button>
+                ))}
+                {!filteredSpellList.length ? (
+                  <div className="px-3 py-6 text-sm text-neutral-500">No spells found.</div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Card Builder">
+          <div className="space-y-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-neutral-700">Spell name</label>
               <div className="flex gap-2">
-                <Input value={spellName} onChange={(e) => setSpellName(e.target.value)} placeholder="Acid Splash" />
-                <Button onClick={fetchSpell} className="gap-2">
-                  <Search className="h-4 w-4" />
+                <input
+                  className="flex-1 rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:border-neutral-500"
+                  value={spellName}
+                  onChange={(e) => setSpellName(e.target.value)}
+                  placeholder="Acid Splash"
+                />
+                <button onClick={() => fetchSpell()} className="rounded-xl bg-neutral-900 px-4 py-2 text-white">
                   Fetch
-                </Button>
+                </button>
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label>Spell URL override</Label>
-              <Input value={siteUrl} onChange={(e) => setSiteUrl(e.target.value)} placeholder="https://dnd5e.wikidot.com/spell:acid-splash" />
-              <p className="text-xs text-neutral-500">Current source: {derivedSpellUrl}</p>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-neutral-700">Spell URL override</label>
+              <input
+                className="w-full rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:border-neutral-500"
+                value={siteUrl}
+                onChange={(e) => setSiteUrl(e.target.value)}
+                placeholder="https://dnd5e.wikidot.com/spell:acid-splash"
+              />
             </div>
 
-            <div className="space-y-2">
-              <Label>Card image</Label>
-              <div className="flex items-center gap-3">
-                <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-medium hover:bg-neutral-50">
-                  <Upload className="h-4 w-4" />
-                  Upload image
+            <div>
+              <label className="mb-1 block text-sm font-medium text-neutral-700">Card image</label>
+              <div className="flex gap-2">
+                <label className="cursor-pointer rounded-xl border border-neutral-300 px-4 py-2 hover:bg-neutral-50">
+                  Upload
                   <input type="file" accept="image/*" className="hidden" onChange={onImageUpload} />
                 </label>
-                <Input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="Paste image URL" />
+                <input
+                  className="flex-1 rounded-xl border border-neutral-300 px-3 py-2 outline-none focus:border-neutral-500"
+                  value={imageUrl}
+                  onChange={(e) => setImageUrl(e.target.value)}
+                  placeholder="Paste image URL"
+                />
               </div>
             </div>
 
-            <Separator />
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Title</Label>
-                <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-neutral-700">Title</label>
+                <input className="w-full rounded-xl border border-neutral-300 px-3 py-2" value={title} onChange={(e) => setTitle(e.target.value)} />
               </div>
-              <div className="space-y-2">
-                <Label>Damage line</Label>
-                <Input value={damage} onChange={(e) => setDamage(e.target.value)} />
+              <div>
+                <label className="mb-1 block text-sm font-medium text-neutral-700">Damage line</label>
+                <input className="w-full rounded-xl border border-neutral-300 px-3 py-2" value={damage} onChange={(e) => setDamage(e.target.value)} />
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label>School / subtitle</Label>
-              <Input value={school} onChange={(e) => setSchool(e.target.value)} />
+            <div>
+              <label className="mb-1 block text-sm font-medium text-neutral-700">School / subtitle</label>
+              <input className="w-full rounded-xl border border-neutral-300 px-3 py-2" value={school} onChange={(e) => setSchool(e.target.value)} />
             </div>
 
-            <div className="space-y-2">
-              <Label>Metadata lines</Label>
-              <Textarea value={metaText} onChange={(e) => setMetaText(e.target.value)} className="min-h-[120px]" />
+            <div>
+              <label className="mb-1 block text-sm font-medium text-neutral-700">Metadata lines</label>
+              <textarea className="min-h-[120px] w-full rounded-xl border border-neutral-300 px-3 py-2" value={metaText} onChange={(e) => setMetaText(e.target.value)} />
             </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>Description</Label>
-                <Button variant="outline" size="sm" onClick={autoFillDamage} className="gap-2">
-                  <Sparkles className="h-4 w-4" />
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <label className="block text-sm font-medium text-neutral-700">Description</label>
+                <button onClick={autoFillDamage} className="rounded-lg border border-neutral-300 px-2 py-1 text-sm hover:bg-neutral-50">
                   Infer damage
-                </Button>
+                </button>
               </div>
-              <Textarea value={manualText} onChange={(e) => setManualText(e.target.value)} className="min-h-[220px]" />
+              <textarea className="min-h-[220px] w-full rounded-xl border border-neutral-300 px-3 py-2" value={manualText} onChange={(e) => setManualText(e.target.value)} />
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Accent color</Label>
-                <div className="flex items-center gap-3">
-                  <input type="color" value={accent} onChange={(e) => setAccent(e.target.value)} className="h-12 w-16 rounded-xl border bg-white" />
-                  <Input value={accent} onChange={(e) => setAccent(e.target.value)} />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>A4 sheet copies</Label>
-                <Input type="number" min={1} max={9} value={copies} onChange={(e) => setCopies(Math.max(1, Math.min(9, Number(e.target.value) || 1)))} />
+            <div>
+              <label className="mb-1 block text-sm font-medium text-neutral-700">Accent color</label>
+              <div className="flex gap-2">
+                <input type="color" value={accent} onChange={(e) => setAccent(e.target.value)} className="h-11 w-16 rounded-xl border border-neutral-300 bg-white" />
+                <input className="flex-1 rounded-xl border border-neutral-300 px-3 py-2" value={accent} onChange={(e) => setAccent(e.target.value)} />
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button onClick={exportSinglePng} className="gap-2">
-                <Download className="h-4 w-4" />
+              <button onClick={addCurrentCardToSheet} className="rounded-xl bg-neutral-900 px-4 py-2 text-white">
+                Add to A4 sheet
+              </button>
+              <button onClick={exportSinglePng} className="rounded-xl border border-neutral-300 px-4 py-2 hover:bg-neutral-50">
                 Export PNG
-              </Button>
-              <Button variant="outline" onClick={exportA4Pdf} className="gap-2">
-                <Grid3X3 className="h-4 w-4" />
+              </button>
+              <button onClick={exportA4Pdf} className="rounded-xl border border-neutral-300 px-4 py-2 hover:bg-neutral-50">
                 Export A4 PDF
-              </Button>
+              </button>
             </div>
 
-            <Badge variant="secondary" className="rounded-xl px-3 py-1 text-xs">
-              {status}
-            </Badge>
-          </CardContent>
-        </Card>
-
-        <div className="space-y-6 overflow-auto">
-          <div className="flex flex-col items-center gap-3">
-            <p className="text-sm font-medium text-neutral-600">Single card preview</p>
-            <div id="single-card-preview">
-              <SpellCard data={cardData} imageUrl={imageUrl} />
-            </div>
+            <div className="rounded-xl bg-neutral-100 px-3 py-2 text-sm text-neutral-700">{status}</div>
           </div>
+        </SectionCard>
 
-          <div className="flex flex-col items-center gap-3">
-            <p className="text-sm font-medium text-neutral-600">A4 sheet preview (3×3)</p>
-            <div id="a4-sheet" className="w-[794px] bg-white p-[18px] shadow-2xl">
-              <div className="grid grid-cols-3 gap-[10px]">
-                {Array.from({ length: 9 }).map((_, i) => (
-                  <div key={i} className="flex items-center justify-center">
-                    {i < copies ? <SpellCard data={cardData} imageUrl={imageUrl} small /> : <div className="h-[340px] w-[235px] rounded-[24px] border border-dashed border-neutral-300 bg-neutral-50" />}
-                  </div>
-                ))}
+        <div className="space-y-6">
+          <SectionCard title="Current Preview">
+            <div className="flex justify-center">
+              <div id="single-card-preview">
+                <SpellCard data={cardData} imageUrl={imageUrl} />
               </div>
             </div>
-          </div>
+          </SectionCard>
+
+          <SectionCard title="A4 Sheet Builder">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="text-sm text-neutral-600">{sheetCards.length} / 9 cards</div>
+              <button onClick={clearSheet} className="rounded-xl border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-50">
+                Clear sheet
+              </button>
+            </div>
+
+            <div className="mb-4 flex flex-wrap gap-2">
+              {sheetCards.map((card, index) => (
+                <div key={card.id} className="flex items-center gap-2 rounded-xl bg-neutral-100 px-3 py-2 text-sm">
+                  <span>{index + 1}. {card.data.title}</span>
+                  <button onClick={() => removeCardFromSheet(card.id)} className="rounded-md bg-white px-2 py-1 text-xs hover:bg-neutral-200">
+                    Remove
+                  </button>
+                </div>
+              ))}
+              {!sheetCards.length ? <div className="text-sm text-neutral-500">Add cards from the builder to fill the A4 page.</div> : null}
+            </div>
+
+            <div className="overflow-auto rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+              <div id="a4-sheet" className="mx-auto w-[794px] bg-white p-[18px]">
+                <div className="grid grid-cols-3 gap-[10px]">
+                  {Array.from({ length: 9 }).map((_, i) => {
+                    const card = sheetCards[i];
+                    return (
+                      <div key={i} className="flex items-center justify-center">
+                        {card ? (
+                          <SpellCard data={card.data} imageUrl={card.imageUrl} small />
+                        ) : (
+                          <div className="h-[340px] w-[235px] rounded-[24px] border border-dashed border-neutral-300 bg-white" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </SectionCard>
         </div>
       </div>
     </div>

@@ -58,13 +58,10 @@ export async function scrapeSpell(url: string): Promise<SpellCardData> {
   const metaLines = lines.filter((line) => metaFields.some((field) => line.startsWith(field)));
 
   const durationIndex = lines.findIndex((line) => line.startsWith("Duration:"));
+  const startIndex = durationIndex >= 0 ? durationIndex + 1 : -1;
 
-  let startIndex = durationIndex >= 0 ? durationIndex + 1 : -1;
   let endIndex = lines.findIndex((line) => /^Spell Lists?[:.]/i.test(line));
-
-  if (endIndex === -1) {
-    endIndex = lines.length;
-  }
+  if (endIndex === -1) endIndex = lines.length;
 
   const description =
     startIndex >= 0 ? lines.slice(startIndex, endIndex).join("\n\n") : "";
